@@ -4,6 +4,7 @@ import path from "node:path";
 const nextConfig: NextConfig = {
   /* Monorepo / stray lockfile: pin tracing to this app so `next dev` picks the right root */
   outputFileTracingRoot: path.join(process.cwd()),
+  output: "standalone",
   reactCompiler: true,
   images: {
     remotePatterns: [

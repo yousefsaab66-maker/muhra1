@@ -22,7 +22,19 @@ import {
   type Product,
   type SiteContent,
 } from "@/lib/catalog";
+import type { BagItem, Order, OrderStatus, PlaceOrderInput } from "@/lib/commerce-types";
 import { SHIPPING_FEE_IQD, toIqd, type GovernorateCode } from "@/lib/iraq";
+
+export type {
+  BagItem,
+  OrderStatus,
+  PaymentMethod,
+  OrderCustomer,
+  OrderPayment,
+  Order,
+  PlaceOrderInput,
+} from "@/lib/commerce-types";
+export type { GovernorateCode };
 
 const KEY_PRODUCTS = "muhra-products-v1";
 const KEY_COLLECTIONS = "muhra-collections-v1";
@@ -34,62 +46,6 @@ const KEY_WISH = "muhra-wishlist-v1";
 const KEY_ORDERS = "muhra-orders-v1";
 const KEY_USER = "muhra-user-v1";
 
-export type BagItem = {
-  productId: string;
-  qty: number;
-  size?: string;
-};
-
-export type OrderStatus =
-  | "pending"
-  | "preparing"
-  | "shipped"
-  | "delivered"
-  | "cancelled";
-
-export type PaymentMethod = "mastercard" | "zaincash" | "cod";
-
-export interface OrderCustomer {
-  name: string;
-  phone: string;
-  governorate: GovernorateCode;
-  city: string;
-  address: string;
-  notes?: string;
-}
-
-export interface OrderPayment {
-  method: PaymentMethod;
-  /** Last 4 digits when method = mastercard */
-  cardLast4?: string;
-  /** Phone number used for ZainCash demo */
-  zaincashPhone?: string;
-}
-
-export interface Order {
-  id: string;
-  createdAt: string;
-  customerName: string;
-  /** Full customer details captured from the checkout form (Iraq only). */
-  customer?: OrderCustomer;
-  items: { productId: string; name: string; qty: number; price: number; size?: string }[];
-  subtotal: number;
-  /** Subtotal converted to IQD using a static demo rate. */
-  subtotalIqd?: number;
-  /** Flat shipping fee, in IQD (demo). */
-  shippingFeeIqd?: number;
-  /** Order total in IQD (subtotalIqd + shippingFeeIqd). */
-  totalIqd?: number;
-  currency: Currency;
-  status: OrderStatus;
-  payment?: OrderPayment;
-}
-
-export interface PlaceOrderInput {
-  customer: OrderCustomer;
-  payment: OrderPayment;
-}
-
 export interface UserProfile {
   name: string;
   email?: string;
@@ -97,7 +53,6 @@ export interface UserProfile {
 }
 
 type StoreCtx = {
-  // catalog
   products: Product[];
   collections: Collection[];
   journal: JournalArticle[];
@@ -110,7 +65,6 @@ type StoreCtx = {
   setSite: (s: SiteContent) => void;
   resetCatalog: () => void;
 
-  // shopping
   bag: BagItem[];
   addToBag: (p: { productId: string; size?: string; qty?: number }) => void;
   removeFromBag: (productId: string, size?: string) => void;
@@ -122,13 +76,16 @@ type StoreCtx = {
   toggleWish: (productId: string) => void;
   inWishlist: (productId: string) => boolean;
 
+  /** وضع الكتالوج عبر Supabase (متغيرات بيئة عامة). */
+  remoteCatalog: boolean;
+  refreshCatalog: () => Promise<void>;
+  pullRemoteOrders: () => Promise<void>;
+
   orders: Order[];
-  /** Legacy quick-checkout used elsewhere in the app — keeps existing flows working. */
   placeDemoOrder: () => Order | null;
-  /** Real demo checkout that captures customer + payment details. */
-  placeOrder: (input: PlaceOrderInput) => Order | null;
-  setOrderStatus: (id: string, status: OrderStatus) => void;
-  removeOrder: (id: string) => void;
+  placeOrder: (input: PlaceOrderInput) => Promise<Order | null>;
+  setOrderStatus: (id: string, status: OrderStatus) => Promise<void>;
+  removeOrder: (id: string) => Promise<void>;
 
   user: UserProfile | null;
   signIn: (name: string, email?: string) => void;
@@ -153,11 +110,12 @@ function writeJSON(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // ignore quota errors
+    /* quota */
   }
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
+  const remoteCatalog = useMemo(() => Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL), []);
   const [hydrated, setHydrated] = useState(false);
 
   const [products, setProductsState] = useState<Product[]>(SEED_PRODUCTS);
@@ -173,26 +131,71 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const initialized = useRef(false);
 
+  const refreshCatalog = useCallback(async () => {
+    if (!remoteCatalog) return;
+    try {
+      const r = await fetch("/api/catalog/products", { cache: "no-store" });
+      const d = (await r.json()) as { products?: Product[] };
+      if (d?.products && d.products.length > 0) setProductsState(d.products);
+    } catch {
+      /* ignore */
+    }
+  }, [remoteCatalog]);
+
+  const pullRemoteOrders = useCallback(async () => {
+    if (!remoteCatalog) return;
+    try {
+      const { listOrdersRemote } = await import("@/app/actions/muhra-backend");
+      const r = await listOrdersRemote();
+      if (r.ok) setOrders(r.orders);
+    } catch {
+      /* ignore */
+    }
+  }, [remoteCatalog]);
+
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
 
-    setProductsState(readJSON<Product[]>(KEY_PRODUCTS, SEED_PRODUCTS));
-    setCollectionsState(readJSON<Collection[]>(KEY_COLLECTIONS, SEED_COLLECTIONS));
-    setJournalState(readJSON<JournalArticle[]>(KEY_JOURNAL, SEED_JOURNAL));
-    setBoutiquesState(readJSON<Boutique[]>(KEY_BOUTIQUES, SEED_BOUTIQUES));
-    setSiteState(readJSON<SiteContent>(KEY_SITE, SEED_SITE));
-    setBag(readJSON<BagItem[]>(KEY_BAG, []));
-    setWishlist(readJSON<string[]>(KEY_WISH, []));
-    setOrders(readJSON<Order[]>(KEY_ORDERS, []));
-    setUser(readJSON<UserProfile | null>(KEY_USER, null));
-    setHydrated(true);
-  }, []);
+    const hydrateSiteAndUi = () => {
+      setCollectionsState(readJSON<Collection[]>(KEY_COLLECTIONS, SEED_COLLECTIONS));
+      setJournalState(readJSON<JournalArticle[]>(KEY_JOURNAL, SEED_JOURNAL));
+      setBoutiquesState(readJSON<Boutique[]>(KEY_BOUTIQUES, SEED_BOUTIQUES));
+      setSiteState(readJSON<SiteContent>(KEY_SITE, SEED_SITE));
+      setBag(readJSON<BagItem[]>(KEY_BAG, []));
+      setWishlist(readJSON<string[]>(KEY_WISH, []));
+      setUser(readJSON<UserProfile | null>(KEY_USER, null));
+      setHydrated(true);
+    };
 
-  const setProducts = useCallback((p: Product[]) => {
-    setProductsState(p);
-    writeJSON(KEY_PRODUCTS, p);
-  }, []);
+    if (remoteCatalog) {
+      void fetch("/api/catalog/products", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { products?: Product[] } | null) => {
+          if (d?.products && d.products.length > 0) setProductsState(d.products);
+          else setProductsState(SEED_PRODUCTS);
+        })
+        .catch(() => {
+          setProductsState(SEED_PRODUCTS);
+        });
+      queueMicrotask(hydrateSiteAndUi);
+    } else {
+      queueMicrotask(() => {
+        setProductsState(readJSON<Product[]>(KEY_PRODUCTS, SEED_PRODUCTS));
+        setOrders(readJSON<Order[]>(KEY_ORDERS, []));
+        hydrateSiteAndUi();
+      });
+    }
+  }, [remoteCatalog]);
+
+  const setProducts = useCallback(
+    (p: Product[]) => {
+      setProductsState(p);
+      if (!remoteCatalog) writeJSON(KEY_PRODUCTS, p);
+    },
+    [remoteCatalog],
+  );
+
   const setCollections = useCallback((c: Collection[]) => {
     setCollectionsState(c);
     writeJSON(KEY_COLLECTIONS, c);
@@ -313,6 +316,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [bag, products]);
 
   const placeDemoOrder = useCallback((): Order | null => {
+    if (remoteCatalog) return null;
     if (bag.length === 0) return null;
     const items = buildOrderItems();
     if (items.length === 0) return null;
@@ -342,11 +346,26 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setBag([]);
     writeJSON(KEY_BAG, []);
     return order;
-  }, [bag, buildOrderItems, user]);
+  }, [remoteCatalog, bag, buildOrderItems, user]);
 
   const placeOrder = useCallback(
-    (input: PlaceOrderInput): Order | null => {
+    async (input: PlaceOrderInput): Promise<Order | null> => {
       if (bag.length === 0) return null;
+      const lines = bag.map((b) => ({ productId: b.productId, qty: b.qty, size: b.size }));
+
+      if (remoteCatalog) {
+        try {
+          const { createOrderRemote } = await import("@/app/actions/muhra-backend");
+          const res = await createOrderRemote(input, lines);
+          if (!res.ok) return null;
+          setBag([]);
+          writeJSON(KEY_BAG, []);
+          return res.order;
+        } catch {
+          return null;
+        }
+      }
+
       const items = buildOrderItems();
       if (items.length === 0) return null;
       const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
@@ -378,24 +397,42 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       writeJSON(KEY_BAG, []);
       return order;
     },
-    [bag, buildOrderItems],
+    [remoteCatalog, bag, buildOrderItems],
   );
 
-  const setOrderStatus = useCallback((id: string, status: OrderStatus) => {
-    setOrders((curr) => {
-      const next = curr.map((o) => (o.id === id ? { ...o, status } : o));
-      writeJSON(KEY_ORDERS, next);
-      return next;
-    });
-  }, []);
+  const setOrderStatus = useCallback(
+    async (id: string, status: OrderStatus) => {
+      if (remoteCatalog) {
+        const { updateOrderStatusRemote } = await import("@/app/actions/muhra-backend");
+        const ok = await updateOrderStatusRemote(id, status);
+        if (ok) void pullRemoteOrders();
+        return;
+      }
+      setOrders((curr) => {
+        const next = curr.map((o) => (o.id === id ? { ...o, status } : o));
+        writeJSON(KEY_ORDERS, next);
+        return next;
+      });
+    },
+    [remoteCatalog, pullRemoteOrders],
+  );
 
-  const removeOrder = useCallback((id: string) => {
-    setOrders((curr) => {
-      const next = curr.filter((o) => o.id !== id);
-      writeJSON(KEY_ORDERS, next);
-      return next;
-    });
-  }, []);
+  const removeOrder = useCallback(
+    async (id: string) => {
+      if (remoteCatalog) {
+        const { deleteOrderRemote } = await import("@/app/actions/muhra-backend");
+        const ok = await deleteOrderRemote(id);
+        if (ok) void pullRemoteOrders();
+        return;
+      }
+      setOrders((curr) => {
+        const next = curr.filter((o) => o.id !== id);
+        writeJSON(KEY_ORDERS, next);
+        return next;
+      });
+    },
+    [remoteCatalog, pullRemoteOrders],
+  );
 
   const signIn = useCallback((name: string, email?: string) => {
     const profile: UserProfile = {
@@ -434,6 +471,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       wishlist,
       toggleWish,
       inWishlist,
+      remoteCatalog,
+      refreshCatalog,
+      pullRemoteOrders,
       orders,
       placeDemoOrder,
       placeOrder,
@@ -465,6 +505,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       wishlist,
       toggleWish,
       inWishlist,
+      remoteCatalog,
+      refreshCatalog,
+      pullRemoteOrders,
       orders,
       placeDemoOrder,
       placeOrder,

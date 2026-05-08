@@ -25,7 +25,7 @@ import {
 import { SectionTitle } from "@/components/Section";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
-import { useStore, type OrderStatus, type PaymentMethod } from "@/components/providers/StoreProvider";
+import { useStore, type OrderStatus } from "@/components/providers/StoreProvider";
 import type {
   Category,
   Collection,
@@ -66,6 +66,7 @@ const TABS: { id: TabId; label: string; icon: React.ComponentType<{ className?: 
 
 export default function StaffPage() {
   const { signedInAs, signOut, hydrated } = useAuth();
+  const { remoteCatalog, pullRemoteOrders } = useStore();
   const router = useRouter();
   const [tab, setTab] = useState<TabId>("dashboard");
 
@@ -73,11 +74,15 @@ export default function StaffPage() {
     if (hydrated && !signedInAs.staff) router.replace("/staff/login");
   }, [hydrated, signedInAs.staff, router]);
 
+  useEffect(() => {
+    if (hydrated && signedInAs.staff && remoteCatalog) void pullRemoteOrders();
+  }, [hydrated, signedInAs.staff, remoteCatalog, pullRemoteOrders]);
+
   if (!hydrated) return <div className="px-6 py-32 text-center opacity-70">…</div>;
   if (!signedInAs.staff) return null;
 
   return (
-    <div className="page-gutter py-12">
+    <div className="px-5 py-12 md:px-10">
       <div className="mx-auto max-w-[1500px]">
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -214,15 +219,34 @@ function emptyProduct(): Product {
 }
 
 function ProductsPane() {
-  const { products, setProducts, collections, addToBag } = useStore();
+  const { products, setProducts, collections, addToBag, remoteCatalog, refreshCatalog } = useStore();
   const { t } = useLocale();
   const router = useRouter();
   const [editing, setEditing] = useState<Product | null>(null);
   const [creating, setCreating] = useState(false);
   const [orderHint, setOrderHint] = useState<Product | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  const onSave = (p: Product) => {
+  const onSave = async (p: Product) => {
+    setSaveError(null);
     const fixed = ensureProductOrderable(p);
+    if (remoteCatalog) {
+      try {
+        const { upsertProductRemote } = await import("@/app/actions/muhra-backend");
+        const res = await upsertProductRemote(fixed);
+        if (!res.ok) {
+          setSaveError(res.error);
+          return;
+        }
+        setOrderHint(res.product);
+        await refreshCatalog();
+      } catch {
+        setSaveError("Request failed");
+      }
+      setEditing(null);
+      setCreating(false);
+      return;
+    }
     if (creating) {
       const next = { ...fixed, id: "p-" + Date.now() };
       setProducts([next, ...products]);
@@ -236,8 +260,19 @@ function ProductsPane() {
     setCreating(false);
   };
 
-  const onDelete = (id: string) => {
+  const onDelete = async (id: string) => {
     if (typeof window !== "undefined" && !window.confirm("Delete this product?")) return;
+    if (remoteCatalog) {
+      setSaveError(null);
+      try {
+        const { deleteProductRemote } = await import("@/app/actions/muhra-backend");
+        await deleteProductRemote(id);
+        await refreshCatalog();
+      } catch {
+        setSaveError("Delete failed");
+      }
+      return;
+    }
     setProducts(products.filter((p) => p.id !== id));
   };
 
@@ -256,6 +291,12 @@ function ProductsPane() {
           <Plus className="h-4 w-4" strokeWidth={1.4} /> New product
         </button>
       </header>
+
+      {saveError && (
+        <p className="mt-4 text-sm" style={{ color: "var(--color-bordeaux)" }} role="alert">
+          {saveError}
+        </p>
+      )}
 
       {orderHint && (
         <div
@@ -361,7 +402,12 @@ function ProductsPane() {
                     <button type="button" aria-label="Edit" onClick={() => { setEditing(p); setCreating(false); }} className="opacity-70 hover:opacity-100">
                       <Pencil className="h-4 w-4" strokeWidth={1.4} />
                     </button>
-                    <button type="button" aria-label="Delete" onClick={() => onDelete(p.id)} className="opacity-70 hover:opacity-100">
+                    <button
+                      type="button"
+                      aria-label="Delete"
+                      onClick={() => void onDelete(p.id)}
+                      className="opacity-70 hover:opacity-100"
+                    >
                       <Trash2 className="h-4 w-4" strokeWidth={1.4} />
                     </button>
                   </div>
@@ -397,7 +443,7 @@ function ProductEditor({
   collections: Collection[];
   isCreating: boolean;
   onCancel: () => void;
-  onSave: (p: Product) => void;
+  onSave: (p: Product) => void | Promise<void>;
 }) {
   const [draft, setDraft] = useState<Product>(product);
   const update = <K extends keyof Product>(k: K, v: Product[K]) =>
@@ -424,9 +470,9 @@ function ProductEditor({
           </div>
           <form
             className="space-y-5 p-6"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
-              onSave(draft);
+              await onSave(draft);
             }}
           >
           <Field label="Name">
@@ -849,11 +895,13 @@ function ImagesField({
   );
 }
 
-const PAYMENT_LABELS: Record<PaymentMethod, string> = {
-  mastercard: "Mastercard",
-  zaincash: "ZainCash",
-  cod: "COD",
-};
+function paymentMethodLabel(method: string | undefined) {
+  if (!method) return "—";
+  if (method === "cod") return "COD";
+  if (method === "mastercard") return "Mastercard";
+  if (method === "zaincash") return "ZainCash";
+  return method;
+}
 
 const STATUS_OPTIONS = ["pending", "preparing", "shipped", "delivered", "cancelled"] as const;
 
@@ -976,7 +1024,7 @@ function OrdersPane() {
                             background: "var(--surface)",
                           }}
                         >
-                          {PAYMENT_LABELS[o.payment.method]}
+                          {paymentMethodLabel(o.payment.method)}
                         </span>
                       ) : (
                         "—"
@@ -996,7 +1044,7 @@ function OrdersPane() {
                       <select
                         className="staff-input"
                         value={o.status}
-                        onChange={(e) => setOrderStatus(o.id, e.target.value as OrderStatus)}
+                        onChange={(e) => void setOrderStatus(o.id, e.target.value as OrderStatus)}
                         style={{ padding: "0.4rem 0.5rem" }}
                       >
                         {STATUS_OPTIONS.map((s) => (
@@ -1011,7 +1059,7 @@ function OrdersPane() {
                         <button
                           type="button"
                           aria-label="Remove"
-                          onClick={() => removeOrder(o.id)}
+                          onClick={() => void removeOrder(o.id)}
                           className="opacity-70 hover:opacity-100"
                         >
                           <Trash2 className="h-4 w-4" strokeWidth={1.4} />
@@ -1043,9 +1091,7 @@ function OrdersPane() {
                             )}
                             <p className="eyebrow mt-4">{t("staff.orders.payment")}</p>
                             <p className="mt-2 text-sm">
-                              {o.payment?.method
-                                ? PAYMENT_LABELS[o.payment.method]
-                                : "—"}
+                              {o.payment?.method ? paymentMethodLabel(o.payment.method) : "—"}
                               {o.payment?.cardLast4 ? ` · •••• ${o.payment.cardLast4}` : ""}
                               {o.payment?.zaincashPhone ? ` · ${o.payment.zaincashPhone}` : ""}
                             </p>
@@ -1407,7 +1453,12 @@ function SecurityPane() {
   return (
     <section>
       <h2 className="font-display text-3xl">Security</h2>
-      <p className="mt-2 opacity-70 text-sm">Change your staff credentials. Hashes are kept locally.</p>
+      <p className="mt-2 opacity-70 text-sm">
+        Change your staff credentials. Hashes are kept locally. For live orders and product sync, set{" "}
+        <strong className="font-normal">STAFF_USERNAME</strong> and{" "}
+        <strong className="font-normal">STAFF_PASSWORD</strong> on the server to match these credentials
+        (after you change them here, update the deployment environment too).
+      </p>
       <form
         onSubmit={async (e) => {
           e.preventDefault();

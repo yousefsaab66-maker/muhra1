@@ -82,6 +82,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         sessionStorage.setItem(KEY_SESSION(role), username);
         if (role === "staff") setStaffSession(username);
         else setAdminSession(username);
+        if (role === "staff") {
+          void fetch("/api/staff/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ username, password }),
+          });
+        }
         return true;
       } catch {
         return false;
@@ -96,8 +104,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore
     }
-    if (role === "staff") setStaffSession(null);
-    else setAdminSession(null);
+    if (role === "staff") {
+      setStaffSession(null);
+      void fetch("/api/staff/session", { method: "DELETE", credentials: "include" });
+    } else setAdminSession(null);
   }, []);
 
   const changeCredentials = useCallback(
@@ -119,8 +129,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem(KEY_USER(role), cleanUser);
         localStorage.setItem(KEY_HASH(role), newHash);
         sessionStorage.setItem(KEY_SESSION(role), cleanUser);
-        if (role === "staff") setStaffSession(cleanUser);
-        else setAdminSession(cleanUser);
+        if (role === "staff") {
+          setStaffSession(cleanUser);
+          void fetch("/api/staff/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ username: cleanUser, password: cleanPwd }),
+          });
+        } else setAdminSession(cleanUser);
         return true;
       } catch {
         return false;

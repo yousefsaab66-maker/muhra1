@@ -3,17 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { CreditCard, Smartphone, Truck } from "lucide-react";
+import { Truck } from "lucide-react";
 import { SectionTitle } from "@/components/Section";
 import { SafeImage } from "@/components/SafeImage";
 import { useLocale } from "@/components/providers/LocaleProvider";
-import {
-  useStore,
-  type BagItem,
-  type OrderCustomer,
-  type OrderPayment,
-  type PaymentMethod,
-} from "@/components/providers/StoreProvider";
+import { useStore, type BagItem, type OrderCustomer } from "@/components/providers/StoreProvider";
 import { formatPrice } from "@/lib/format";
 import {
   IRAQ_GOVERNORATES,
@@ -30,55 +24,7 @@ type FieldErrors = Partial<{
   governorate: string;
   city: string;
   address: string;
-  cardNumber: string;
-  cardExpiry: string;
-  cardCvv: string;
-  zaincashPhone: string;
 }>;
-
-const DIGITS_ONLY = /\D+/g;
-
-function luhnValid(num: string) {
-  const digits = num.replace(DIGITS_ONLY, "");
-  if (digits.length < 13 || digits.length > 19) return false;
-  let sum = 0;
-  let dbl = false;
-  for (let i = digits.length - 1; i >= 0; i -= 1) {
-    let n = Number(digits[i]);
-    if (dbl) {
-      n *= 2;
-      if (n > 9) n -= 9;
-    }
-    sum += n;
-    dbl = !dbl;
-  }
-  return sum % 10 === 0;
-}
-
-function expiryValid(raw: string) {
-  const m = raw.match(/^\s*(\d{2})\s*\/\s*(\d{2})\s*$/);
-  if (!m) return false;
-  const month = Number(m[1]);
-  const year = 2000 + Number(m[2]);
-  if (month < 1 || month > 12) return false;
-  const now = new Date();
-  const exp = new Date(year, month, 0, 23, 59, 59);
-  return exp.getTime() >= now.getTime();
-}
-
-function formatCardNumber(raw: string) {
-  return raw
-    .replace(DIGITS_ONLY, "")
-    .slice(0, 19)
-    .replace(/(.{4})/g, "$1 ")
-    .trim();
-}
-
-function formatExpiry(raw: string) {
-  const digits = raw.replace(DIGITS_ONLY, "").slice(0, 4);
-  if (digits.length < 3) return digits;
-  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
-}
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -104,16 +50,10 @@ export default function CheckoutPage() {
   const [city, setCity] = useState("");
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
-  const [method, setMethod] = useState<PaymentMethod>("cod");
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardName, setCardName] = useState("");
-  const [cardExpiry, setCardExpiry] = useState("");
-  const [cardCvv, setCardCvv] = useState("");
-  const [zaincashPhone, setZaincashPhone] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
 
-  // If the bag is empty after hydration, redirect back to /bag for the empty state.
   useEffect(() => {
     if (hydrated && items.length === 0 && !submitting) {
       // Allow the empty state below to render; no redirect — keeps /checkout addressable.
@@ -129,20 +69,12 @@ export default function CheckoutPage() {
     if (!governorate) next.governorate = t("v.governorate");
     if (!city.trim()) next.city = t("v.required");
     if (!address.trim()) next.address = t("v.required");
-    if (method === "mastercard") {
-      if (!luhnValid(cardNumber)) next.cardNumber = t("v.cardNumber");
-      if (!expiryValid(cardExpiry)) next.cardExpiry = t("v.cardExpiry");
-      if (!/^\d{3,4}$/.test(cardCvv.trim())) next.cardCvv = t("v.cardCvv");
-    }
-    if (method === "zaincash") {
-      if (!IRAQI_PHONE_REGEX.test(zaincashPhone.replace(/[\s\-().]/g, "")))
-        next.zaincashPhone = t("v.zaincash");
-    }
     return next;
   };
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setOrderError(null);
     const next = validate();
     setErrors(next);
     if (Object.keys(next).length > 0) {
@@ -162,25 +94,10 @@ export default function CheckoutPage() {
       address: address.trim(),
       notes: notes.trim() || undefined,
     };
-    const payment: OrderPayment = (() => {
-      if (method === "mastercard") {
-        const digits = cardNumber.replace(DIGITS_ONLY, "");
-        return {
-          method,
-          cardLast4: digits.slice(-4),
-        };
-      }
-      if (method === "zaincash") {
-        return {
-          method,
-          zaincashPhone: normalizeIraqiPhone(zaincashPhone) ?? zaincashPhone.trim(),
-        };
-      }
-      return { method };
-    })();
-    const order = placeOrder({ customer, payment });
+    const order = await placeOrder({ customer, payment: { method: "cod" } });
     if (!order) {
       setSubmitting(false);
+      setOrderError(t("checkout.orderFailed"));
       return;
     }
     router.push(`/checkout/success?orderId=${encodeURIComponent(order.id)}` as never);
@@ -192,7 +109,7 @@ export default function CheckoutPage() {
 
   if (items.length === 0) {
     return (
-      <div className="page-gutter py-20 md:py-28">
+      <div className="px-5 py-20 md:px-10 md:py-28">
         <SectionTitle eyebrow={t("checkout.eyebrow")} title={t("checkout.heading")} />
         <div className="mx-auto mt-12 max-w-md text-center">
           <p className="font-display text-3xl">{t("checkout.empty.title")}</p>
@@ -206,7 +123,7 @@ export default function CheckoutPage() {
   }
 
   return (
-    <div className="page-gutter py-16 md:py-24">
+    <div className="px-5 py-16 md:px-10 md:py-24">
       <SectionTitle eyebrow={t("checkout.eyebrow")} title={t("checkout.heading")} />
       <p className="mt-4 text-center text-[12px] tracking-eyebrow uppercase opacity-70">
         {t("delivery.iraqOnly")}
@@ -307,113 +224,45 @@ export default function CheckoutPage() {
             <p className="mt-2 text-[11px] tracking-eyebrow uppercase opacity-65">
               {t("pay.method")}
             </p>
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <PaymentRadio
-                value="mastercard"
-                current={method}
-                onChange={setMethod}
-                label={t("pay.mastercard")}
-                desc={t("pay.mastercard.desc")}
-                icon={<CreditCard className="h-5 w-5" strokeWidth={1.4} />}
-              />
-              <PaymentRadio
-                value="zaincash"
-                current={method}
-                onChange={setMethod}
-                label={t("pay.zaincash")}
-                desc={t("pay.zaincash.desc")}
-                icon={<Smartphone className="h-5 w-5" strokeWidth={1.4} />}
-              />
-              <PaymentRadio
-                value="cod"
-                current={method}
-                onChange={setMethod}
-                label={t("pay.cod")}
-                desc={t("pay.cod.desc")}
-                icon={<Truck className="h-5 w-5" strokeWidth={1.4} />}
-              />
-            </div>
-
-            {method === "mastercard" && (
+            <div
+              className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-stretch"
+              role="group"
+              aria-label={t("pay.cod")}
+            >
               <div
-                className="mt-6 grid gap-4 p-5"
-                style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
+                className="flex flex-1 flex-col gap-3 p-5 text-start"
+                style={{
+                  border: "1px solid var(--color-gold)",
+                  background: "var(--surface)",
+                }}
               >
-                <CheckoutField label={t("pay.cardNumber")} error={errors.cardNumber}>
-                  <input
-                    data-field="cardNumber"
-                    inputMode="numeric"
-                    dir="ltr"
-                    className="input-luxe font-mono tracking-widest"
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
-                    placeholder="•••• •••• •••• ••••"
-                  />
-                </CheckoutField>
-                <div className="grid gap-4 md:grid-cols-3">
-                  <CheckoutField label={t("pay.cardName")}>
-                    <input
-                      className="input-luxe"
-                      value={cardName}
-                      onChange={(e) => setCardName(e.target.value)}
-                    />
-                  </CheckoutField>
-                  <CheckoutField label={t("pay.cardExpiry")} error={errors.cardExpiry}>
-                    <input
-                      data-field="cardExpiry"
-                      inputMode="numeric"
-                      dir="ltr"
-                      className="input-luxe"
-                      value={cardExpiry}
-                      onChange={(e) => setCardExpiry(formatExpiry(e.target.value))}
-                      placeholder="MM/YY"
-                    />
-                  </CheckoutField>
-                  <CheckoutField label={t("pay.cardCvv")} error={errors.cardCvv}>
-                    <input
-                      data-field="cardCvv"
-                      inputMode="numeric"
-                      dir="ltr"
-                      className="input-luxe"
-                      value={cardCvv}
-                      onChange={(e) =>
-                        setCardCvv(e.target.value.replace(DIGITS_ONLY, "").slice(0, 4))
-                      }
-                      placeholder="•••"
-                    />
-                  </CheckoutField>
+                <div className="flex items-center gap-3">
+                  <span
+                    className="inline-flex h-9 w-9 items-center justify-center"
+                    style={{
+                      background: "var(--color-onyx)",
+                      color: "var(--color-ivory)",
+                      border: "1px solid var(--line-strong)",
+                    }}
+                    aria-hidden
+                  >
+                    <Truck className="h-5 w-5" strokeWidth={1.4} />
+                  </span>
+                  <span className="font-display text-lg leading-tight">{t("pay.cod")}</span>
                 </div>
+                <p className="text-[12px] leading-relaxed opacity-75">{t("pay.cod.desc")}</p>
               </div>
-            )}
-
-            {method === "zaincash" && (
-              <div
-                className="mt-6 grid gap-3 p-5"
-                style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
-              >
-                <CheckoutField label={t("pay.zaincashPhone")} error={errors.zaincashPhone}>
-                  <input
-                    data-field="zaincashPhone"
-                    type="tel"
-                    inputMode="tel"
-                    dir="ltr"
-                    className="input-luxe"
-                    value={zaincashPhone}
-                    onChange={(e) => setZaincashPhone(e.target.value)}
-                    placeholder="07XXXXXXXXX"
-                  />
-                </CheckoutField>
-                <p className="text-xs opacity-70">{t("pay.zaincashNote")}</p>
-              </div>
-            )}
-
-            {method === "cod" && (
-              <div
-                className="mt-6 p-5"
-                style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
-              >
-                <p className="text-sm opacity-80">{t("pay.codNote")}</p>
-              </div>
+            </div>
+            <div
+              className="mt-6 p-5"
+              style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
+            >
+              <p className="text-sm opacity-80">{t("pay.codNote")}</p>
+            </div>
+            {orderError && (
+              <p className="mt-4 text-sm" style={{ color: "var(--color-bordeaux)" }} role="alert">
+                {orderError}
+              </p>
             )}
           </section>
         </div>
@@ -522,51 +371,5 @@ function CheckoutField({
         </span>
       )}
     </label>
-  );
-}
-
-function PaymentRadio({
-  value,
-  current,
-  onChange,
-  label,
-  desc,
-  icon,
-}: {
-  value: PaymentMethod;
-  current: PaymentMethod;
-  onChange: (v: PaymentMethod) => void;
-  label: string;
-  desc: string;
-  icon: React.ReactNode;
-}) {
-  const active = value === current;
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(value)}
-      aria-pressed={active}
-      className="text-start p-5 transition-colors"
-      style={{
-        border: active ? "1px solid var(--color-gold)" : "1px solid var(--line-strong)",
-        background: active ? "var(--surface)" : "transparent",
-      }}
-    >
-      <div className="flex items-center gap-3">
-        <span
-          className="inline-flex h-9 w-9 items-center justify-center"
-          style={{
-            background: active ? "var(--color-onyx)" : "transparent",
-            color: active ? "var(--color-ivory)" : "inherit",
-            border: "1px solid var(--line-strong)",
-          }}
-          aria-hidden
-        >
-          {icon}
-        </span>
-        <span className="font-display text-lg leading-tight">{label}</span>
-      </div>
-      <p className="mt-3 text-[12px] leading-relaxed opacity-75">{desc}</p>
-    </button>
   );
 }

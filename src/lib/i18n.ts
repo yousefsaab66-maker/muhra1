@@ -146,6 +146,8 @@ export const DICTS: Record<Locale, Dict> = {
     "checkout.empty.title": "Your bag is empty",
     "checkout.empty.body": "Add a creation to your bag before checking out.",
     "checkout.empty.cta": "Discover the catalogue",
+    "checkout.orderFailed":
+      "We could not place your order. Check your connection, that the bag is still valid, then try again.",
     // Validation
     "v.required": "This field is required.",
     "v.phone": "Enter a valid Iraqi mobile number (07XXXXXXXXX).",
@@ -512,6 +514,8 @@ export const DICTS: Record<Locale, Dict> = {
     "checkout.empty.title": "Votre panier est vide",
     "checkout.empty.body": "Ajoutez une création à votre panier avant de payer.",
     "checkout.empty.cta": "Découvrir le catalogue",
+    "checkout.orderFailed":
+      "La commande n'a pas pu être enregistrée. Vérifiez la connexion et réessayez.",
     "v.required": "Ce champ est requis.",
     "v.phone": "Entrez un numéro de mobile irakien valide (07XXXXXXXXX).",
     "v.governorate": "Veuillez choisir un gouvernorat.",
@@ -855,6 +859,8 @@ export const DICTS: Record<Locale, Dict> = {
     "checkout.empty.title": "La tua borsa è vuota",
     "checkout.empty.body": "Aggiungi una creazione alla tua borsa prima di procedere.",
     "checkout.empty.cta": "Scopri il catalogo",
+    "checkout.orderFailed":
+      "Impossibile completare l'ordine. Controlla la connessione e riprova.",
     "v.required": "Questo campo è obbligatorio.",
     "v.phone": "Inserisci un numero di cellulare iracheno valido (07XXXXXXXXX).",
     "v.governorate": "Scegli un governatorato.",
@@ -1198,6 +1204,8 @@ export const DICTS: Record<Locale, Dict> = {
     "checkout.empty.title": "Tu bolso está vacío",
     "checkout.empty.body": "Añade una creación a tu bolso antes de pagar.",
     "checkout.empty.cta": "Descubre el catálogo",
+    "checkout.orderFailed":
+      "No se pudo registrar el pedido. Comprueba la conexión e inténtalo de nuevo.",
     "v.required": "Este campo es obligatorio.",
     "v.phone": "Introduce un móvil iraquí válido (07XXXXXXXXX).",
     "v.governorate": "Elige una gobernación.",
@@ -1541,6 +1549,8 @@ export const DICTS: Record<Locale, Dict> = {
     "checkout.empty.title": "حقيبتك فارغة",
     "checkout.empty.body": "أضف قطعة إلى حقيبتك قبل إتمام الشراء.",
     "checkout.empty.cta": "استكشف الكتالوج",
+    "checkout.orderFailed":
+      "تعذّر إتمام الطلب. تحقّق من الاتصال أو أن المنتجات ما زالت متوفرة ثم أعد المحاولة.",
     "v.required": "هذا الحقل مطلوب.",
     "v.phone": "يرجى إدخال رقم هاتف عراقي صحيح (07XXXXXXXXX).",
     "v.governorate": "يرجى اختيار محافظة.",
