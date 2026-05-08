@@ -115,7 +115,8 @@ function writeJSON(key: string, value: unknown) {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const remoteCatalog = useMemo(() => Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL), []);
+  /** يُحدَّد وقت التشغيل من `/api/catalog/products` حتى يعمل الكتالوج لو غاب NEXT_PUBLIC وقت بناء الاستضافة. */
+  const [remoteCatalog, setRemoteCatalog] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   const [products, setProductsState] = useState<Product[]>(SEED_PRODUCTS);
@@ -132,15 +133,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const initialized = useRef(false);
 
   const refreshCatalog = useCallback(async () => {
-    if (!remoteCatalog) return;
     try {
       const r = await fetch("/api/catalog/products", { cache: "no-store" });
+      if (!r.ok) return;
       const d = (await r.json()) as { products?: Product[] };
-      if (d?.products && d.products.length > 0) setProductsState(d.products);
+      if (Array.isArray(d.products)) {
+        setRemoteCatalog(true);
+        setProductsState(d.products);
+      }
     } catch {
       /* ignore */
     }
-  }, [remoteCatalog]);
+  }, []);
 
   const pullRemoteOrders = useCallback(async () => {
     if (!remoteCatalog) return;
@@ -168,25 +172,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setHydrated(true);
     };
 
-    if (remoteCatalog) {
-      void fetch("/api/catalog/products", { cache: "no-store" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d: { products?: Product[] } | null) => {
-          if (d?.products && d.products.length > 0) setProductsState(d.products);
-          else setProductsState(SEED_PRODUCTS);
-        })
-        .catch(() => {
-          setProductsState(SEED_PRODUCTS);
-        });
-      queueMicrotask(hydrateSiteAndUi);
-    } else {
-      queueMicrotask(() => {
-        setProductsState(readJSON<Product[]>(KEY_PRODUCTS, SEED_PRODUCTS));
-        setOrders(readJSON<Order[]>(KEY_ORDERS, []));
-        hydrateSiteAndUi();
+    const useLocalCatalog = () => {
+      setRemoteCatalog(false);
+      setProductsState(readJSON<Product[]>(KEY_PRODUCTS, SEED_PRODUCTS));
+      setOrders(readJSON<Order[]>(KEY_ORDERS, []));
+    };
+
+    void fetch("/api/catalog/products", { cache: "no-store" })
+      .then(async (r) => {
+        if (!r.ok) {
+          useLocalCatalog();
+          return;
+        }
+        try {
+          const d = (await r.json()) as { products?: Product[] };
+          if (Array.isArray(d.products)) {
+            setRemoteCatalog(true);
+            setProductsState(d.products.length > 0 ? d.products : SEED_PRODUCTS);
+          } else {
+            useLocalCatalog();
+          }
+        } catch {
+          useLocalCatalog();
+        }
+      })
+      .catch(() => {
+        useLocalCatalog();
+      })
+      .finally(() => {
+        queueMicrotask(hydrateSiteAndUi);
       });
-    }
-  }, [remoteCatalog]);
+  }, []);
 
   const setProducts = useCallback(
     (p: Product[]) => {
