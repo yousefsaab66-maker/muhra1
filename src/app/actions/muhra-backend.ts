@@ -148,14 +148,22 @@ export async function upsertProductRemote(p: Product): Promise<{ ok: true; produ
       .select("*")
       .single();
     if (error || !data) return { ok: false, error: error?.message ?? "update_failed" };
+    revalidateCatalogPaths();
     revalidatePath("/staff");
     return { ok: true, product: rowToProduct(data as ProductRow) };
   }
 
   const { data, error } = await sb.from("products").insert(row).select("*").single();
   if (error || !data) return { ok: false, error: error?.message ?? "insert_failed" };
+  revalidateCatalogPaths();
   revalidatePath("/staff");
   return { ok: true, product: rowToProduct(data as ProductRow) };
+}
+
+function revalidateCatalogPaths() {
+  revalidatePath("/");
+  revalidatePath("/products");
+  revalidatePath("/collections");
 }
 
 export async function deleteProductRemote(id: string): Promise<boolean> {
@@ -165,6 +173,7 @@ export async function deleteProductRemote(id: string): Promise<boolean> {
   const sb = supabaseAdmin();
   const { error } = await sb.from("products").delete().eq("id", id);
   if (error) return false;
+  revalidateCatalogPaths();
   revalidatePath("/staff");
   return true;
 }
